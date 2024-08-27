@@ -1,0 +1,113 @@
+from pymavlink import mavutil
+import cv2
+
+connection = mavutil.mavlink_connection('tcp:localhost:5762')
+
+connection.wait_heartbeat()
+print("Heartbeat from system %u component %u" % (connection.target_system, connection.target_component))
+
+mode_map = {
+    "LOITER": 5,
+    "AUTO": 3,
+    "RTL": 6,
+    "MANUAL": 0,
+    "GUIDED": 4
+}
+
+
+def set_mode(mode):
+    if mode not in mode_map:
+        print(f"Geçersiz mod: {mode}")
+        return
+
+    mode_id = mode_map[mode]
+    connection.mav.command_long_send(
+        connection.target_system,
+        connection.target_component,
+        mavutil.mavlink.MAV_CMD_DO_SET_MODE,
+        0,
+        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+        mode_id, 0, 0, 0, 0, 0, 0
+    )
+    msg = connection.recv_match(type='COMMAND_ACK', blocking=True)
+    print(msg)
+
+
+def move_to_location(lat, lon, alt):
+    connection.mav.mission_item_send(
+        connection.target_system,
+        connection.target_component,
+        0,
+        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+        mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+        2, 0, 0, 0, 0, 0,
+        lat, lon, alt
+    )
+    msg = connection.recv_match(type='COMMAND_ACK', blocking=True)
+    print(msg)
+
+
+def detect_object_and_move():
+    cap = cv2.VideoCapture(0)
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_color = (30, 150, 50)
+        upper_color = (255, 255, 180)
+        mask = cv2.inRange(hsv, lower_color, upper_color)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            cx = x + w // 2
+            cy = y + h // 2
+            print(f"Object detected! Coordinates: ({cx}, {cy})")
+
+            lat, lon, alt = 0, 0, 10
+            move_to_location(lat, lon, alt)
+
+            set_mode("RTL")
+            return
+
+        cv2.imshow("Frame", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+while True:
+    girdi = input("Bir Girdi Verin (1=Arm, 2=TakeOff, 3=Mode, 4=Nesneye Git): ")
+
+    if girdi == "1":
+
+        connection.mav.command_long_send(connection.target_system, connection.target_component,
+                                         mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0, 1, 0, 0, 0, 0, 0, 0)
+        msg = connection.recv_match(type='COMMAND_ACK', blocking=True)
+        print(msg)
+
+    elif girdi == "2":
+
+        connection.mav.command_long_send(connection.target_system, connection.target_component,
+                                         mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, 10)
+        msg = connection.recv_match(type='COMMAND_ACK', blocking=True)
+        print(msg)
+
+    elif girdi == "3":
+
+        mode = input("Bir Mod Verin (LOITER, AUTO, RTL, MANUAL, GUIDED): ").upper()
+        set_mode(mode)
+
+    elif girdi == "4":
+
+        detect_object_and_move()
+
+    else:
+        print("Geçerli bir girdi verin: 1,2,3 veya 4.")
+
